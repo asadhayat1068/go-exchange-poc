@@ -101,21 +101,31 @@ func (l *Limit) DeleteOrder(o *Order) {
 	}
 	o.Limit = nil
 	l.TotalVolume -= o.Size
-	// TODO: Resort the whole resting  orders
+	// Resort the whole resting  orders
 	sort.Sort(l.Orders)
 }
 
 func (l *Limit) Fill(o *Order) []Match {
-	matches := []Match{}
+	var (
+		matches        []Match
+		ordersToDelete Orders
+	)
 
 	for _, order := range l.Orders {
 		match := l.fillOrder(order, o)
 		matches = append(matches, match)
 		l.TotalVolume -= match.SizeFilled
+		if order.IsFilled() {
+			ordersToDelete = append(ordersToDelete, order)
+		}
 
 		if o.IsFilled() {
 			break
 		}
+	}
+
+	for _, order := range ordersToDelete {
+		l.DeleteOrder(order)
 	}
 
 	return matches
@@ -193,6 +203,9 @@ func (ob *Orderbook) PlaceMarketOrder(o *Order) []Match {
 		for _, limit := range ob.Asks() {
 			limitMatches := limit.Fill(o)
 			matches = append(matches, limitMatches...)
+			if len(limit.Orders) == 0 {
+				ob.clearLimit(true, limit)
+			}
 		}
 	} else {
 		// Sell Order, Find best bids
@@ -203,6 +216,9 @@ func (ob *Orderbook) PlaceMarketOrder(o *Order) []Match {
 		for _, limit := range ob.Bids() {
 			limitMatches := limit.Fill(o)
 			matches = append(matches, limitMatches...)
+			if len(limit.Orders) == 0 {
+				ob.clearLimit(true, limit)
+			}
 		}
 	}
 
@@ -259,4 +275,24 @@ func (ob *Orderbook) Asks() Limits {
 func (ob *Orderbook) Bids() Limits {
 	sort.Sort(ByBestBid{ob.bids})
 	return ob.bids
+}
+
+func (ob *Orderbook) clearLimit(bid bool, l *Limit) {
+	if bid {
+		delete(ob.BidLimits, l.Price)
+		for i := 0; i < len(ob.bids); i++ {
+			if ob.bids[i] == l {
+				ob.bids[i] = ob.bids[len(ob.bids)-1]
+				ob.bids = ob.bids[:len(ob.bids)-1]
+			}
+		}
+	} else {
+		delete(ob.AskLimits, l.Price)
+		for i := 0; i < len(ob.asks); i++ {
+			if ob.asks[i] == l {
+				ob.asks[i] = ob.asks[len(ob.asks)-1]
+				ob.asks = ob.asks[:len(ob.asks)-1]
+			}
+		}
+	}
 }
