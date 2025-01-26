@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -62,9 +61,11 @@ func TestPlaceMarketOrderMultiMatch(t *testing.T) {
 	ob := NewOrderbook()
 
 	buyOrderC := NewOrder(true, 10)
+	buyOrderD := NewOrder(true, 1)
 	buyOrderB := NewOrder(true, 8)
 	buyOrderA := NewOrder(true, 5)
 
+	ob.PlaceLimitOrder(5_000, buyOrderD)
 	ob.PlaceLimitOrder(5_000, buyOrderA)
 	ob.PlaceLimitOrder(9_000, buyOrderB)
 	ob.PlaceLimitOrder(10_000, buyOrderC)
@@ -72,7 +73,7 @@ func TestPlaceMarketOrderMultiMatch(t *testing.T) {
 	sellOrder := NewOrder(false, 20)
 	matches := ob.PlaceMarketOrder(sellOrder)
 
-	assert(t, len(matches), 3)
-	fmt.Printf("%+v", matches)
-
+	assert(t, ob.BidTotalVolume(), 4.0)
+	assert(t, len(matches), 4)
+	assert(t, len(ob.Bids()), 1)
 }
