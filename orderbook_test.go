@@ -77,3 +77,18 @@ func TestPlaceMarketOrderMultiMatch(t *testing.T) {
 	assert(t, len(matches), 4)
 	assert(t, len(ob.Bids()), 1)
 }
+
+func TestCancelOrder(t *testing.T) {
+	ob := NewOrderbook()
+
+	buyOrder := NewOrder(true, 4)
+	ob.PlaceLimitOrder(10_000, buyOrder)
+
+	assert(t, len(ob.Bids()), 1)
+	assert(t, ob.BidTotalVolume(), 4.0)
+
+	ob.CancelOrder(buyOrder)
+
+	assert(t, len(ob.Bids()), 0)
+	assert(t, ob.BidTotalVolume(), 0.0)
+}
