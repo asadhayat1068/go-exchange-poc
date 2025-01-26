@@ -249,6 +249,11 @@ func (ob *Orderbook) PlaceLimitOrder(price float64, o *Order) {
 	}
 }
 
+func (ob *Orderbook) CancelOrder(o *Order) {
+	limit := o.Limit
+	limit.DeleteOrder(o)
+}
+
 func (ob *Orderbook) BidTotalVolume() float64 {
 	totalVolume := 0.0
 	for i := 0; i < len(ob.bids); i++ {
