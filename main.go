@@ -14,6 +14,8 @@ func main() {
 	ex := NewExchange()
 	e.GET("/books/:market", ex.handleGetBook)
 	e.POST("/order", ex.handlePlaceOrder)
+	// e.DELETE("/order/:id", ex.handleCancelOrder)
+
 	e.Start(":3000")
 
 	fmt.Println("Working!!")
@@ -46,6 +48,7 @@ func NewExchange() *Exchange {
 }
 
 type Order struct {
+	ID        int64
 	Price     float64
 	Size      float64
 	Bid       bool
@@ -53,8 +56,10 @@ type Order struct {
 }
 
 type OrderbookData struct {
-	Asks []*Order
-	Bids []*Order
+	AskTotalVolume float64
+	BidTotalVolume float64
+	Asks           []*Order
+	Bids           []*Order
 }
 
 func (ex *Exchange) handleGetBook(c echo.Context) error {
@@ -66,13 +71,16 @@ func (ex *Exchange) handleGetBook(c echo.Context) error {
 	}
 
 	orderbookData := OrderbookData{
-		Asks: []*Order{},
-		Bids: []*Order{},
+		AskTotalVolume: ob.AskTotalVolume(),
+		BidTotalVolume: ob.BidTotalVolume(),
+		Asks:           []*Order{},
+		Bids:           []*Order{},
 	}
 
 	for _, limit := range ob.Asks() {
 		for _, order := range limit.Orders {
 			o := Order{
+				ID:        order.ID,
 				Price:     limit.Price,
 				Size:      order.Size,
 				Bid:       order.Bid,
@@ -119,7 +127,17 @@ func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
 	ob := ex.orderbooks[market]
 	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size)
 
-	ob.PlaceLimitOrder(placeOrderData.Price, order)
-
-	return c.JSON(200, map[string]any{"msg": "Order Placed!"})
+	if placeOrderData.Type == LimitOrder {
+		ob.PlaceLimitOrder(placeOrderData.Price, order)
+		return c.JSON(200, map[string]any{"msg": "Limit Order Placed!"})
+	} else if placeOrderData.Type == MarketOrder {
+		matches := ob.PlaceMarketOrder(order)
+		return c.JSON(200, map[string]any{"matches": len(matches)})
+	}
+	return nil
 }
+
+// func (ex *Exchange) handleCancelOrder(c echo.Context) error {
+// 	id := c.Param("id")
+// 	return nil
+// }
