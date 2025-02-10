@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/asadhayat1068/go_exchange/orderbook"
 	"github.com/labstack/echo/v4"
@@ -11,14 +12,20 @@ import (
 
 func main() {
 	e := echo.New()
+
+	e.HTTPErrorHandler = httpErrorHandler
 	ex := NewExchange()
 	e.GET("/books/:market", ex.handleGetBook)
 	e.POST("/order", ex.handlePlaceOrder)
-	// e.DELETE("/order/:id", ex.handleCancelOrder)
+	e.DELETE("/order/:id", ex.handleCancelOrder)
 
 	e.Start(":3000")
 
 	fmt.Println("Working!!")
+}
+
+func httpErrorHandler(err error, c echo.Context) {
+	fmt.Println(err)
 }
 
 type OrderType string
@@ -94,6 +101,7 @@ func (ex *Exchange) handleGetBook(c echo.Context) error {
 	for _, limit := range ob.Bids() {
 		for _, order := range limit.Orders {
 			o := Order{
+				ID:        order.ID,
 				Price:     limit.Price,
 				Size:      order.Size,
 				Bid:       order.Bid,
@@ -132,12 +140,30 @@ func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
 		return c.JSON(200, map[string]any{"msg": "Limit Order Placed!"})
 	} else if placeOrderData.Type == MarketOrder {
 		matches := ob.PlaceMarketOrder(order)
-		return c.JSON(200, map[string]any{"matches": len(matches)})
+		matchedOrders := make([]*Order, len(matches))
+		for i := 0; i < len(matchedOrders); i++ {
+			match := matches[i]
+			id := match.Bid.ID
+			if order.Bid {
+				id = match.Ask.ID
+			}
+			matchedOrders[i] = &Order{
+				Size:  match.SizeFilled,
+				Price: match.Price,
+				ID:    id,
+			}
+		}
+		return c.JSON(200, map[string]any{"matches": matchedOrders})
 	}
 	return nil
 }
 
-// func (ex *Exchange) handleCancelOrder(c echo.Context) error {
-// 	id := c.Param("id")
-// 	return nil
-// }
+func (ex *Exchange) handleCancelOrder(c echo.Context) error {
+	idStr := c.Param("id")
+	id, _ := strconv.Atoi(idStr)
+	ob := ex.orderbooks[MarketETH]
+	order := ob.Orders[int64(id)]
+	ob.CancelOrder(order)
+
+	return c.JSON(200, map[string]any{"msg": "Order Deleted!"})
+}
