@@ -1,72 +1,106 @@
 package main
 
 import (
+	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/asadhayat1068/go_exchange/orderbook"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/labstack/echo/v4"
+)
+
+const (
+	MarketETH          Market    = "ETH"
+	MarketOrder        OrderType = "MARKET"
+	LimitOrder         OrderType = "LIMIT"
+	exchangePrivateKey           = "2ec39631df9d2fb4969ab7e31fde7378e0db1802147838e35bedbcb8b79aeae9"
+)
+
+type (
+	OrderType string
+	Market    string
+
+	PlaceOrderRequest struct {
+		Type   OrderType // Limit or Market
+		Bid    bool
+		Size   float64
+		Price  float64
+		Market Market
+	}
+	Order struct {
+		ID        int64
+		Price     float64
+		Size      float64
+		Bid       bool
+		Timestamp int64
+	}
+	OrderbookData struct {
+		AskTotalVolume float64
+		BidTotalVolume float64
+		Asks           []*Order
+		Bids           []*Order
+	}
 )
 
 func main() {
 	e := echo.New()
 
 	e.HTTPErrorHandler = httpErrorHandler
-	ex := NewExchange()
+	ex := NewExchange(exchangePrivateKey)
 	e.GET("/books/:market", ex.handleGetBook)
 	e.POST("/order", ex.handlePlaceOrder)
 	e.DELETE("/order/:id", ex.handleCancelOrder)
 
-	e.Start(":3000")
+	url := "http://localhost:8545"
+	client, err := ethclient.Dial(url)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	address := common.HexToAddress("0xc9E8B0d061e610A02882F67Cb5daFCfd61Bb7253")
+
+	balance, err := client.BalanceAt(ctx, address, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Balance: ", balance)
 
 	fmt.Println("Working!!")
+	e.Start(":3000")
 }
 
 func httpErrorHandler(err error, c echo.Context) {
 	fmt.Println(err)
 }
 
-type OrderType string
-
-const (
-	MarketOrder OrderType = "MARKET"
-	LimitOrder  OrderType = "LIMIT"
-)
-
-type Market string
-
-const (
-	MarketETH Market = "ETH"
-)
-
 type Exchange struct {
+	PrivateKey *ecdsa.PrivateKey
 	orderbooks map[Market]*orderbook.Orderbook
 }
 
-func NewExchange() *Exchange {
+func NewExchange(privateKey string) *Exchange {
 	orderbooks := make(map[Market]*orderbook.Orderbook)
 	orderbooks[MarketETH] = orderbook.NewOrderbook()
 
+	pk, err := crypto.HexToECDSA(exchangePrivateKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	return &Exchange{
+		PrivateKey: pk,
 		orderbooks: orderbooks,
 	}
-}
-
-type Order struct {
-	ID        int64
-	Price     float64
-	Size      float64
-	Bid       bool
-	Timestamp int64
-}
-
-type OrderbookData struct {
-	AskTotalVolume float64
-	BidTotalVolume float64
-	Asks           []*Order
-	Bids           []*Order
 }
 
 func (ex *Exchange) handleGetBook(c echo.Context) error {
@@ -113,14 +147,6 @@ func (ex *Exchange) handleGetBook(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, orderbookData)
-}
-
-type PlaceOrderRequest struct {
-	Type   OrderType // Limit or Market
-	Bid    bool
-	Size   float64
-	Price  float64
-	Market Market
 }
 
 func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
