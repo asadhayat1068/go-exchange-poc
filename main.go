@@ -1,11 +1,11 @@
 package main
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"strconv"
 
@@ -29,6 +29,7 @@ type (
 
 	PlaceOrderRequest struct {
 		Type   OrderType // Limit or Market
+		UserID int64
 		Bid    bool
 		Size   float64
 		Price  float64
@@ -53,30 +54,44 @@ func main() {
 	e := echo.New()
 
 	e.HTTPErrorHandler = httpErrorHandler
-	ex := NewExchange(exchangePrivateKey)
+	url := "http://localhost:8545"
+	client, err := ethclient.Dial(url)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ex := NewExchange(exchangePrivateKey, client)
 	e.GET("/books/:market", ex.handleGetBook)
 	e.POST("/order", ex.handlePlaceOrder)
 	e.DELETE("/order/:id", ex.handleCancelOrder)
 
-	url := "http://localhost:8545"
-	client, err := ethclient.Dial(url)
+	// ctx := context.Background()
+	// address := common.HexToAddress("0xc9E8B0d061e610A02882F67Cb5daFCfd61Bb7253")
 
-	if err != nil {
-		log.Fatal(err)
-	}
+	// balance, err := client.BalanceAt(ctx, address, nil)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
 
-	ctx := context.Background()
-	address := common.HexToAddress("0xc9E8B0d061e610A02882F67Cb5daFCfd61Bb7253")
-
-	balance, err := client.BalanceAt(ctx, address, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Balance: ", balance)
+	// fmt.Println("Balance: ", balance)
 
 	fmt.Println("Working!!")
 	e.Start(":3000")
+}
+
+type User struct {
+	PrivateKey *ecdsa.PrivateKey
+}
+
+func NewUser(privateKey string) *User {
+	pk, err := crypto.HexToECDSA(privateKey)
+	if err != nil {
+		panic(err)
+	}
+
+	return &User{
+		PrivateKey: pk,
+	}
 }
 
 func httpErrorHandler(err error, c echo.Context) {
@@ -84,11 +99,15 @@ func httpErrorHandler(err error, c echo.Context) {
 }
 
 type Exchange struct {
+	Client     *ethclient.Client
+	users      map[int64]*User
+	orders     map[int64]int64
 	PrivateKey *ecdsa.PrivateKey
+	Address    common.Address
 	orderbooks map[Market]*orderbook.Orderbook
 }
 
-func NewExchange(privateKey string) *Exchange {
+func NewExchange(privateKey string, client *ethclient.Client) *Exchange {
 	orderbooks := make(map[Market]*orderbook.Orderbook)
 	orderbooks[MarketETH] = orderbook.NewOrderbook()
 
@@ -96,9 +115,17 @@ func NewExchange(privateKey string) *Exchange {
 	if err != nil {
 		log.Fatal(err)
 	}
+	address, err := getAddress(pk)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	return &Exchange{
+		Client:     client,
+		users:      make(map[int64]*User),
+		orders:     make(map[int64]int64),
 		PrivateKey: pk,
+		Address:    address,
 		orderbooks: orderbooks,
 	}
 }
@@ -149,6 +176,36 @@ func (ex *Exchange) handleGetBook(c echo.Context) error {
 	return c.JSON(http.StatusOK, orderbookData)
 }
 
+func (ex *Exchange) handlePlaceMarketOrder(market Market, order *orderbook.Order) ([]orderbook.Match, []*Order) {
+	ob := ex.orderbooks[market]
+	matches := ob.PlaceMarketOrder(order)
+	matchedOrders := make([]*Order, len(matches))
+	for i := 0; i < len(matchedOrders); i++ {
+		match := matches[i]
+		id := match.Bid.ID
+		if order.Bid {
+			id = match.Ask.ID
+		}
+		matchedOrders[i] = &Order{
+			Size:  match.SizeFilled,
+			Price: match.Price,
+			ID:    id,
+		}
+	}
+	return matches, matchedOrders
+}
+
+func (ex *Exchange) handlePlaceLimitOrder(market Market, price float64, order *orderbook.Order) error {
+	ob := ex.orderbooks[market]
+	ob.PlaceLimitOrder(price, order)
+
+	user := ex.users[order.UserID]
+
+	//TODO: Work on this conversion from ETH to Wei
+	amount := big.NewInt(int64(order.Size))
+	return transferETH(ex.Client, user.PrivateKey, ex.Address, amount)
+}
+
 func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
 
 	var placeOrderData PlaceOrderRequest
@@ -158,26 +215,19 @@ func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
 	}
 
 	market := Market(placeOrderData.Market)
-	ob := ex.orderbooks[market]
-	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size)
+
+	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size, placeOrderData.UserID)
 
 	if placeOrderData.Type == LimitOrder {
-		ob.PlaceLimitOrder(placeOrderData.Price, order)
+		if err := ex.handlePlaceLimitOrder(market, placeOrderData.Price, order); err != nil {
+			return err
+		}
 		return c.JSON(200, map[string]any{"msg": "Limit Order Placed!"})
-	} else if placeOrderData.Type == MarketOrder {
-		matches := ob.PlaceMarketOrder(order)
-		matchedOrders := make([]*Order, len(matches))
-		for i := 0; i < len(matchedOrders); i++ {
-			match := matches[i]
-			id := match.Bid.ID
-			if order.Bid {
-				id = match.Ask.ID
-			}
-			matchedOrders[i] = &Order{
-				Size:  match.SizeFilled,
-				Price: match.Price,
-				ID:    id,
-			}
+	}
+	if placeOrderData.Type == MarketOrder {
+		matches, matchedOrders := ex.handlePlaceMarketOrder(market, order)
+		if err := ex.handleMatches(matches); err != nil {
+			return err
 		}
 		return c.JSON(200, map[string]any{"matches": matchedOrders})
 	}
@@ -192,4 +242,11 @@ func (ex *Exchange) handleCancelOrder(c echo.Context) error {
 	ob.CancelOrder(order)
 
 	return c.JSON(200, map[string]any{"msg": "Order Deleted!"})
+}
+
+func (ex *Exchange) handleMatches(matches []orderbook.Match) error {
+	// for _, match := range matches {
+	// 	// transfer from
+	// }
+	return nil
 }
