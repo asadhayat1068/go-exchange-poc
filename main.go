@@ -20,7 +20,7 @@ const (
 	MarketETH          Market    = "ETH"
 	MarketOrder        OrderType = "MARKET"
 	LimitOrder         OrderType = "LIMIT"
-	exchangePrivateKey           = "2ec39631df9d2fb4969ab7e31fde7378e0db1802147838e35bedbcb8b79aeae9"
+	exchangePrivateKey           = "03c0f8e7a2deb32d47729277231dffdadb3ca13c000571a828c6db98a04c9505"
 )
 
 type (
@@ -59,8 +59,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	ex := NewExchange(exchangePrivateKey, client)
+
+	userId := int64(8888)
+	user := NewUser("ee6f41a0141ec676636989b3f4fbdc0f4f33b1f5c37128aa28231038e5fd999a", userId)
+	ex.users[userId] = user
+
+	userId = int64(9999)
+	user = NewUser("60185242afa260b1d0da391ea1df19b98a4f788d0444230357447a21a4a86305", userId)
+	ex.users[userId] = user
+
 	e.GET("/books/:market", ex.handleGetBook)
 	e.POST("/order", ex.handlePlaceOrder)
 	e.DELETE("/order/:id", ex.handleCancelOrder)
@@ -80,18 +88,27 @@ func main() {
 }
 
 type User struct {
-	PrivateKey *ecdsa.PrivateKey
+	ID            int64
+	PrivateKey    *ecdsa.PrivateKey
+	PublicAddress common.Address
 }
 
-func NewUser(privateKey string) *User {
-	pk, err := crypto.HexToECDSA(privateKey)
+func NewUser(privateKey string, id int64) *User {
+	privKey, err := crypto.HexToECDSA(privateKey)
 	if err != nil {
 		panic(err)
 	}
 
-	return &User{
-		PrivateKey: pk,
+	publicAddress, err := getAddress(privKey)
+	if err != nil {
+		panic(err)
 	}
+	user := &User{
+		ID:            id,
+		PrivateKey:    privKey,
+		PublicAddress: publicAddress,
+	}
+	return user
 }
 
 func httpErrorHandler(err error, c echo.Context) {
@@ -197,9 +214,12 @@ func (ex *Exchange) handlePlaceMarketOrder(market Market, order *orderbook.Order
 
 func (ex *Exchange) handlePlaceLimitOrder(market Market, price float64, order *orderbook.Order) error {
 	ob := ex.orderbooks[market]
-	ob.PlaceLimitOrder(price, order)
 
-	user := ex.users[order.UserID]
+	ob.PlaceLimitOrder(price, order)
+	user, ok := ex.users[order.UserID]
+	if !ok {
+		return fmt.Errorf("User not found. ID: %d", order.UserID)
+	}
 
 	//TODO: Work on this conversion from ETH to Wei
 	amount := big.NewInt(int64(order.Size))
@@ -245,8 +265,24 @@ func (ex *Exchange) handleCancelOrder(c echo.Context) error {
 }
 
 func (ex *Exchange) handleMatches(matches []orderbook.Match) error {
-	// for _, match := range matches {
-	// 	// transfer from
-	// }
+	for _, match := range matches {
+		// fromUser, ok := ex.users[match.Ask.UserID]
+		// if !ok {
+		// 	return fmt.Errorf("user not found: ID: %d", match.Ask.UserID)
+		// }
+		toUser, ok := ex.users[match.Bid.UserID]
+		if !ok {
+			return fmt.Errorf("user not found: ID: %d", match.Bid.UserID)
+		}
+
+		amount := big.NewInt(int64(match.SizeFilled))
+
+		err := transferETH(ex.Client, ex.PrivateKey, toUser.PublicAddress, amount)
+
+		if err != nil {
+			return fmt.Errorf("Transfer failed")
+		}
+
+	}
 	return nil
 }
